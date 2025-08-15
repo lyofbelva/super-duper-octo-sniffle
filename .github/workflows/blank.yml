@@ -1,0 +1,80 @@
+name: CI
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    runs-on: windows-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install psutil selenium webdriver_manager requests
+        
+    - name: Install latest Firefox
+      run: |
+        $FirefoxSetupUrl = "https://download.mozilla.org/?product=firefox-latest&os=win64&lang=en-US"
+        $FirefoxSetupPath = "firefox_setup.exe"
+        Invoke-WebRequest -Uri $FirefoxSetupUrl -OutFile $FirefoxSetupPath
+        Start-Process -FilePath $FirefoxSetupPath -ArgumentList "/S" -Wait
+    
+    - name: Download script files securely
+      run: |
+        $headers = @{
+          'Authorization' = 'Bearer ${{ secrets.PRIVATE_REPO_TOKEN }}'
+          'Accept' = 'application/vnd.github.v3.raw'
+          'User-Agent' = 'GitHub-Actions'
+        }
+        
+        # Python script dosyasını indir
+        $scriptUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/your_script_name.py"
+        Invoke-WebRequest -Uri $scriptUrl -Headers $headers -OutFile "your_script_name.py"
+        
+        # accounts.txt dosyasını indir
+        $accountsUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/accounts.txt"
+        try {
+          Invoke-WebRequest -Uri $accountsUrl -Headers $headers -OutFile "accounts.txt"
+        } catch {
+          Write-Host "accounts.txt bulunamadi, devam ediliyor..."
+        }
+        
+        # Diğer txt dosyalarını indir (isteğe bağlı)
+        $repoUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents"
+        $repoContent = Invoke-RestMethod -Uri $repoUrl -Headers $headers
+        
+        foreach ($file in $repoContent) {
+          if ($file.name -match "\.(txt|json|cfg|ini)$" -and $file.name -ne "accounts.txt") {
+            try {
+              $fileUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/$($file.name)"
+              Invoke-WebRequest -Uri $fileUrl -Headers $headers -OutFile $file.name
+              Write-Host "Downloaded: $($file.name)"
+            } catch {
+              Write-Host "Could not download: $($file.name)"
+            }
+          }
+        }
+    
+    - name: Run script
+      env:
+        MATRIX_INSTANCE: ${{ matrix.instance }}
+      run: python your_script_name.py
+    
+    - name: Cleanup sensitive files
+      if: always()
+      run: |
+        Remove-Item "*.txt" -Force -ErrorAction SilentlyContinue
+        Remove-Item "*.json" -Force -ErrorAction SilentlyContinue
+        Remove-Item "*.cfg" -Force -ErrorAction SilentlyContinue
+        Remove-Item "*.ini" -Force -ErrorAction SilentlyContinue
+        Remove-Item "your_script_name.py" -Force -ErrorAction SilentlyContinue
