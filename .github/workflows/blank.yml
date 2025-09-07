@@ -11,7 +11,7 @@ jobs:
       matrix:
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     runs-on: windows-latest
-    timeout-minutes: 340  # 4.8 saat (6 saat limitinin altında)
+    timeout-minutes: 330  # 4.8 saat
     
     steps:
     - name: Checkout repository
@@ -44,52 +44,83 @@ jobs:
         
         # Python script dosyasını indir
         $scriptUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/your_script_name.py"
-        Invoke-WebRequest -Uri $scriptUrl -Headers $headers -OutFile "your_script_name.py"
+        try {
+          Invoke-WebRequest -Uri $scriptUrl -Headers $headers -OutFile "your_script_name.py"
+          Write-Host "✅ Python script indirildi"
+        } catch {
+          Write-Host "❌ Python script indirilemedi: $($_.Exception.Message)"
+          exit 1
+        }
         
-        # accounts.txt dosyasını indir
+        # accounts.txt dosyasını indir - DÜZELTME BURADA!
         $accountsUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/accounts.txt"
         try {
-          Invoke-WebRequest -Uri $scriptUrl -Headers $headers -OutFile "accounts.txt"
+          Invoke-WebRequest -Uri $accountsUrl -Headers $headers -OutFile "accounts.txt"
+          Write-Host "✅ accounts.txt indirildi"
+          
+          # Dosya içeriğini kontrol et
+          if (Test-Path "accounts.txt") {
+            $accountCount = (Get-Content "accounts.txt" | Where-Object { $_.Trim() -ne "" }).Count
+            Write-Host "📊 Toplam hesap sayısı: $accountCount"
+          }
         } catch {
-          Write-Host "accounts.txt bulunamadi, devam ediliyor..."
+          Write-Host "❌ accounts.txt bulunamadı: $($_.Exception.Message)"
+          Write-Host "⚠️ Script accounts.txt olmadan çalışacak..."
         }
         
-        # Diğer txt dosyalarını indir (isteğe bağlı)
+        # Diğer txt dosyalarını indir
         $repoUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents"
-        $repoContent = Invoke-RestMethod -Uri $repoUrl -Headers $headers
-        
-        foreach ($file in $repoContent) {
-          if ($file.name -match "\.(txt|json|cfg|ini)$" -and $file.name -ne "accounts.txt") {
-            try {
-              $fileUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/$($file.name)"
-              Invoke-WebRequest -Uri $fileUrl -Headers $headers -OutFile $file.name
-              Write-Host "Downloaded: $($file.name)"
-            } catch {
-              Write-Host "Could not download: $($file.name)"
+        try {
+          $repoContent = Invoke-RestMethod -Uri $repoUrl -Headers $headers
+          
+          foreach ($file in $repoContent) {
+            if ($file.name -match "\.(txt|json|cfg|ini)$" -and $file.name -ne "accounts.txt") {
+              try {
+                $fileUrl = "https://api.github.com/repos/aynibakbabm/private-repo/contents/$($file.name)"
+                Invoke-WebRequest -Uri $fileUrl -Headers $headers -OutFile $file.name
+                Write-Host "✅ Downloaded: $($file.name)"
+              } catch {
+                Write-Host "❌ Could not download: $($file.name)"
+              }
             }
           }
+        } catch {
+          Write-Host "⚠️ Repo içeriği alınamadı, devam ediliyor..."
         }
+        
+        # İndirilen dosyaları listele
+        Write-Host "📁 İndirilen dosyalar:"
+        Get-ChildItem -Name "*.txt", "*.py", "*.json", "*.cfg", "*.ini" -ErrorAction SilentlyContinue
     
     - name: Run script with timeout
       env:
         MATRIX_INSTANCE: ${{ matrix.instance }}
       run: |
-        # 4.5 saat sonra scripti durdur
-        $job = Start-Job -ScriptBlock { python your_script_name.py }
+        Write-Host "🚀 Script başlatılıyor - Instance: $env:MATRIX_INSTANCE"
         
-        # 270 dakika (4.5 saat) bekle
-        if (Wait-Job $job -Timeout 16200) {
+        # Timeout ile script çalıştır (4.5 saat = 270 dakika = 16200 saniye)
+        $timeoutSeconds = 16200
+        $job = Start-Job -ScriptBlock { 
+          Set-Location $using:PWD
+          python your_script_name.py 
+        }
+        
+        $completed = Wait-Job $job -Timeout $timeoutSeconds
+        
+        if ($completed) {
+          Write-Host "✅ Script normal şekilde tamamlandı"
           Receive-Job $job
         } else {
-          Write-Host "Script 4.5 saat sonra durduruldu, yeniden başlatılacak..."
-          Stop-Job $job
-          Remove-Job $job
+          Write-Host "⏰ Script 4.5 saat sonra timeout'a uğradı"
+          Stop-Job $job -Force
+          Remove-Job $job -Force
         }
     
-    - name: Trigger next workflow run
-      if: always()
+    - name: Trigger next workflow (if scheduled)
+      if: github.event_name == 'schedule'
       run: |
-        # Bir sonraki workflow'u tetikle
+        Write-Host "🔄 Scheduled run tamamlandı, yeni workflow tetikleniyor..."
+        
         $headers = @{
           'Authorization' = 'Bearer ${{ secrets.GITHUB_TOKEN }}'
           'Accept' = 'application/vnd.github.v3+json'
@@ -97,21 +128,23 @@ jobs:
         }
         
         $body = @{
-          'ref' = 'main'  # veya master
+          'ref' = '${{ github.ref_name }}'
         } | ConvertTo-Json
         
         try {
-          Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/ci.yml/dispatches" -Method POST -Headers $headers -Body $body
-          Write-Host "Yeni workflow tetiklendi!"
+          $response = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}.yml/dispatches" -Method POST -Headers $headers -Body $body
+          Write-Host "✅ Yeni workflow başarıyla tetiklendi!"
         } catch {
-          Write-Host "Workflow tetikleme hatası: $($_.Exception.Message)"
+          Write-Host "❌ Workflow tetikleme hatası: $($_.Exception.Message)"
         }
     
     - name: Cleanup sensitive files
       if: always()
       run: |
+        Write-Host "🧹 Dosyalar temizleniyor..."
         Remove-Item "*.txt" -Force -ErrorAction SilentlyContinue
         Remove-Item "*.json" -Force -ErrorAction SilentlyContinue
         Remove-Item "*.cfg" -Force -ErrorAction SilentlyContinue
         Remove-Item "*.ini" -Force -ErrorAction SilentlyContinue
         Remove-Item "your_script_name.py" -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ Temizlik tamamlandı"
