@@ -2,8 +2,6 @@ name: CI Auto-Restart
 on: 
   push:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */5 * * *'  # Her 5 saatte bir çalış
 
 jobs:
   build:
